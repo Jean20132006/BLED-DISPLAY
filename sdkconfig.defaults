@@ -1,0 +1,88 @@
+# ============================================================================
+# ESP32-S3-WROOM-1-N16R8 : 16MB Flash, 8MB Octal PSRAM
+# ============================================================================
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---- Flash ----
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="16MB"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# ---- Custom partition table (see partitions.csv) ----
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- Octal PSRAM (the "R8" in N16R8) ----
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y
+
+# ---- CPU / RTOS ----
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_UNICORE=n
+
+# ---- RGB LCD peripheral: keep ISR IRAM-safe & reduce tearing on VSYNC ----
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+CONFIG_LCD_RGB_RESTART_IN_VSYNC=y
+
+# ---- GDMA: control functions (e.g. gdma_start) IRAM-resident - kept as a
+# defensive measure, but on its own this did NOT fully fix the crash below
+# (confirmed by testing - the panic recurred identically). See the PSRAM
+# code-placement fix further down, which is the actual comprehensive fix. ----
+CONFIG_GDMA_CTRL_FUNC_IN_IRAM=y
+
+# ---- Move code + read-only data from flash into PSRAM.
+# Root cause of the "Cache disabled but cached memory region accessed"
+# panic: the RGB LCD panel drives continuous background DMA (via GDMA)
+# through code that lives in flash-mapped cache space. Any legitimate
+# flash-cache-disabled window elsewhere (WiFi's first NVS read, in this
+# case) crashes the instant that DMA-related code needs to execute during
+# it. Chasing this one interrupt path at a time (GDMA/LCD IRAM flags) only
+# fixes individual symptoms and can conflict with itself (as it did here).
+# The actual fix: PSRAM has its own bus, completely unaffected by flash
+# cache suspension - moving code/rodata there sidesteps the entire problem
+# class, not just this one occurrence of it. ----
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+
+# ---- Misc ----
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# ---- LVGL: must match the RGB565 frame buffer used in crowpanel_bsp.c ----
+CONFIG_LV_COLOR_DEPTH_16=y
+
+# ---- LVGL: largest font (clock time, blood-loss and pad-count numbers) ----
+CONFIG_LV_FONT_MONTSERRAT_48=y
+
+# ---- LVGL: UI fonts (Clock tab, status bar, wizard, tables) ----
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+
+
+# ---- LVGL: use the real system heap (PSRAM-backed, megabytes) instead of
+# LVGL's own built-in fixed 64KB pool. With 5 tabs' worth of pages, lists,
+# a keyboard, and textareas, 64KB isn't enough - exhausting it manifests
+# as a watchdog-timeout hang deep inside LVGL's internal allocation code
+# (looked like a mystery crash in app code, but wasn't). ----
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# ---- LVGL: use the real C library's sprintf, not LVGL's own minimal one.
+# LVGL's built-in sprintf doesn't support floating-point format specifiers
+# (%f/%.1f) by default - lv_label_set_text_fmt(label, "%.1f C", temp_c)
+# silently renders as just "f" instead of the actual number (confirmed
+# against a known LVGL GitHub issue with the identical symptom). %d works
+# fine since it's unaffected - this is specifically a float-printf gap. ----
+CONFIG_LV_USE_CLIB_SPRINTF=y
+
+
+
